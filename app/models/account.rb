@@ -28,10 +28,6 @@ class Account < ApplicationRecord
     }
   end
 
-  def plus_funds!(amount)
-    update_columns(attributes_after_plus_funds!(amount))
-  end
-
   def plus_funds(amount)
     with_lock { plus_funds!(amount) }
     self
@@ -71,14 +67,6 @@ class Account < ApplicationRecord
     self
   end
 
-  def attributes_after_sub_funds!(amount)
-    if amount <= ZERO || amount > balance
-      raise AccountError, "Cannot subtract funds (account id: #{id}, amount: #{amount}, balance: #{balance})."
-    end
-
-    { balance: balance - amount }
-  end
-
   def lock_funds!(amount)
     update_columns(attributes_after_lock_funds!(amount))
   end
@@ -86,14 +74,6 @@ class Account < ApplicationRecord
   def lock_funds(amount)
     with_lock { lock_funds!(amount) }
     self
-  end
-
-  def attributes_after_lock_funds!(amount)
-    if amount <= ZERO || amount > balance
-      raise AccountError, "Cannot lock funds (account id: #{id}, amount: #{amount}, balance: #{balance}, locked: #{locked})."
-    end
-
-    { balance: balance - amount, locked: locked + amount }
   end
 
   def unlock_funds!(amount)
@@ -113,10 +93,6 @@ class Account < ApplicationRecord
     { balance: balance + amount, locked: locked - amount }
   end
 
-  def unlock_and_sub_funds!(amount)
-    update_columns(attributes_after_unlock_and_sub_funds!(amount))
-  end
-
   def unlock_and_sub_funds(amount)
     with_lock { unlock_and_sub_funds!(amount) }
     self
@@ -132,6 +108,32 @@ class Account < ApplicationRecord
 
   def amount
     balance + locked
+  end
+
+  private
+
+  def unlock_and_sub_funds!(amount)
+    update_columns(attributes_after_unlock_and_sub_funds!(amount))
+  end
+
+  def plus_funds!(amount)
+    update_columns(attributes_after_plus_funds!(amount))
+  end
+
+  def attributes_after_lock_funds!(amount)
+    if amount <= ZERO || amount > balance
+      raise AccountError, "Cannot lock funds (account id: #{id}, amount: #{amount}, balance: #{balance}, locked: #{locked})."
+    end
+
+    { balance: balance - amount, locked: locked + amount }
+  end
+
+  def attributes_after_sub_funds!(amount)
+    if amount <= ZERO || amount > balance
+      raise AccountError, "Cannot subtract funds (account id: #{id}, amount: #{amount}, balance: #{balance})."
+    end
+
+    { balance: balance - amount }
   end
 end
 
