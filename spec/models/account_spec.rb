@@ -54,6 +54,35 @@ describe Account do
     end
   end
 
+  describe 'parallel transactions' do
+    let(:strike_volume) { '10.0'.to_d }
+    let(:account) { create_account }
+    let(:threads_count) { 100 }
+    it 'initial balance is equal to balance after multiply operations', clean_database_with_truncation: true do
+      account.plus_funds(strike_volume)
+      account_initial_balance = account.balance
+      threads = []
+      threads += threads_count.times.map do
+        Thread.new do
+          account.plus_funds(strike_volume)
+        rescue ActiveRecord::ConnectionTimeoutError
+          retry
+        end
+      end
+
+      threads += threads_count.times.map do
+        Thread.new do
+          account.sub_funds(strike_volume)
+        rescue ActiveRecord::ConnectionTimeoutError
+          retry
+        end
+      end
+
+      threads.flatten.each &:join
+      expect(account_initial_balance).to eq account.reload.balance
+    end
+  end
+
   describe 'concurrent lock_funds' do
     it 'should raise error on the second lock_funds' do
       account1 = Account.find subject.id
