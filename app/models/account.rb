@@ -3,6 +3,8 @@
 class Account < ApplicationRecord
   AccountError = Class.new(StandardError)
 
+  serialize :remote_usernames, JSON unless Rails.configuration.database_support_json
+
   belongs_to :currency, required: true
   belongs_to :member, required: true
 
