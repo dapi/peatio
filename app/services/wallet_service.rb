@@ -22,21 +22,60 @@ class WalletService
     )
   end
 
-  def support_polling?
-    @adapter.respond_to?(:poll_intentions) && @wallet.settings['allow_polling']
+  def support_deposits_polling?
+    @adapter.respond_to?(:poll_deposits) && @wallet.settings['allow_deposits_polling']
   end
 
-  def poll_intentions!
+  def support_withdraws_polling?
+    @adapter.respond_to?(:poll_withdraws) && @wallet.settings['allow_withdraws_polling']
+  end
+
+  def poll_withdraws!
     currency = @wallet.currencies.first
     @adapter.configure(wallet:   @wallet.to_wallet_api_settings,
                        currency: { id: currency.id })
-    @adapter.poll_intentions.each do |intention|
+    @adapter.poll_vouchers.each do |voucher|
+      withdraw = Withdraw.find_by(txid: voucher[:id], currency_id: voucher[:currency])
+      if withdraw.present?
+        if withdraw.amount==voucher[:amount]
+          withdraw.with_lock do
+            case voucher[:status]
+            when 'cashed'
+              if withdraw.confirming?
+                Rails.logger.info("Withdraw #{withdraw.id} successed")
+                withdraw.success!
+              else
+                Rails.logger.warn("Withdraw #{withdraw.id} has wrong status (#{withdraw.aasm_state})")
+              end
+            when 'active'
+              # do nothing
+            else
+              Rails.logger.error("Voucher #{voucher[:id]} has unknown status (#{voucher[:status]})")
+            end
+          end
+        else
+          Rails.logger.error("Withdraw and intention amounts are not equeal #{withdraw.amount}<>#{voucher[:amount]} with voucher ##{voucher[:id]} for #{currency.id} in wallet #{@wallet.name}")
+        end
+      else
+        Rails.logger.warn("No such withdraw voucher ##{voucher[:id]} for #{currency.id} in wallet #{@wallet.name}")
+      end
+    end
+  end
+
+  def poll_deposits!
+    currency = @wallet.currencies.first
+    @adapter.configure(wallet:   @wallet.to_wallet_api_settings,
+                       currency: { id: currency.id })
+    @adapter.poll_deposits.each do |intention|
       deposit = Deposit.find_by(currency: currency, intention_id: intention[:id])
       if deposit.present?
         if deposit.amount==intention[:amount]
           deposit.with_lock do
             if deposit.submitted?
               deposit.accept!
+              deposit.account.member.beneficiaries
+                .create_with(data: { address: intention[:username] })
+                .find_or_create_by!(name: intention[:username], currency: currency) if @wallet.settings['save_beneficiary']
             else
               Rails.logger.warn("Deposit #{deposit.id} has wrong status (#{deposit.aasm_state})") unless deposit.accepted?
             end
@@ -63,9 +102,14 @@ class WalletService
                                           amount:     withdrawal.amount,
                                           currency_id: withdrawal.currency_id,
                                           options: { tid: withdrawal.tid })
+
     transaction = @adapter.create_transaction!(transaction)
-    save_transaction(transaction.as_json.merge(from_address: @wallet.address), withdrawal) if transaction.present?
-    transaction
+
+    withdrawal.with_lock do
+      save_transaction(transaction.as_json.merge(from_address: @wallet.address), withdrawal) if transaction.present?
+      withdrawal.update metadata: withdrawal.metadata.merge( 'links' => transaction.options['links'] ) if transaction.options&.has_key? 'links'
+      transaction
+    end
   end
 
   def spread_deposit(deposit)

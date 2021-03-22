@@ -20,6 +20,31 @@ module Bitzlato
       end.slice(:id)
     end
 
+    def create_transaction!(transaction, options = {})
+      voucher = client.post(
+        '/api/p2p/vouchers/',
+        {'cryptocurrency': transaction.currency_id.upcase, 'amount': transaction.amount, 'method':'crypto','currency': 'USD'}
+      )
+
+      transaction.options = transaction
+        .options
+        .merge(
+          'voucher' => voucher,
+          'links' => voucher['links'].map { |link| { 'title' => link['type'], 'url' => link['url'] } }
+      )
+
+      transaction.txout = voucher['deepLinkCode']
+      transaction.hash = voucher['deepLinkCode']
+      transaction
+    rescue Bitzlato::Client::Error => e
+      raise Peatio::Wallet::ClientError, e
+    end
+
+    def load_balance!
+      # TODO fetch actual balance
+      999_999_999 # Yeah!
+    end
+
     def create_deposit_intention!(account_id: , amount: )
       response = client
         .post('/api/gate/v1/invoices/', {
@@ -30,13 +55,14 @@ module Bitzlato
 
       {
         amount: response['amount'].to_d,
+        username: response['username'],
         id: response['id'],
-        links: response['link'].symbolize_keys,
+        links: response['link'].each_with_object([]) { |e, a| a << { 'title' => e.first, 'url' => e.second } },
         expires_at: Time.at(response['expiryAt']/1000)
       }
     end
 
-    def poll_intentions
+    def poll_deposits
       client
         .get('/api/gate/v1/invoices/transactions/')['data']
         .map do |transaction|
@@ -44,6 +70,19 @@ module Bitzlato
           id: transaction['invoiceId'],
           amount: transaction['amount'].to_d,
           cryptocurrency: transaction['cryptocurrency']
+        }
+      end
+    end
+
+    def poll_vouchers
+      client
+        .get('/api/p2p/vouchers/')['data']
+        .map do |voucher|
+        {
+          id: voucher['deepLinkCode'],
+          status: voucher['status'],
+          amount: voucher.dig('cryptocurrency', 'amount').to_d,
+          currency: voucher.dig('cryptocurrency', 'code').downcase
         }
       end
     end
@@ -56,9 +95,9 @@ module Bitzlato
 
     def client
       @client ||= Bitzlato::Client
-        .new(home_url: @wallet.fetch(:uri),
-             key: @wallet.fetch(:key),
-             uid: @wallet.fetch(:uid),
+        .new(home_url: ENV.fetch('BITZLATO_API_URL', @wallet.fetch(:uri)),
+             key: ENV.fetch('BITZLATO_API_KEY', @wallet.fetch(:key)).yield_self { |key| key.is_a?(String) ? JSON.parse(key) : key },
+             uid: ENV.fetch('BITZLATO_API_CLIENT_UID', @wallet.fetch(:uid)).to_i,
              logger: Rails.env.development?)
     end
   end
