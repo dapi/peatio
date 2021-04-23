@@ -18,8 +18,12 @@ namespace :seed do
   task currencies: :environment do
     Currency.transaction do
       YAML.load_file(Rails.root.join('config/seed/currencies.yml')).each do |hash|
-        next if Currency.exists?(id: hash.fetch('id'))
-        Currency.create!(hash)
+        currency = Currency.find_by(id: hash.fetch('id'))
+        if currency.present?
+          currency.update! hash
+        else
+          Currency.create!(hash)
+        end
       end
     end
   end
@@ -89,11 +93,15 @@ namespace :seed do
   task wallets: :environment do
     Wallet.transaction do
       YAML.load_file(Rails.root.join('config/seed/wallets.yml')).each do |hash|
-        next if Wallet.exists?(name: hash.fetch('name'))
         if hash['currency_ids'].is_a?(String)
           hash['currency_ids'] = hash['currency_ids'].split(',')
         end
-        Wallet.create!(hash)
+        wallet = Wallet.find_by(name: hash.fetch('name'))
+        if wallet.present?
+          wallet.update! hash
+        else
+          Wallet.create!(hash)
+        end
       end
     end
   end

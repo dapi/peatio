@@ -6,6 +6,7 @@ class Deposit < ApplicationRecord
 
   serialize :spread, Array
   serialize :from_addresses, Array
+  serialize :data, JSON unless Rails.configuration.database_support_json
 
   include AASM
   include AASM::Locking
@@ -120,6 +121,13 @@ class Deposit < ApplicationRecord
       return nil if result.pending
     end
     true
+  end
+
+  def transfer_links
+    # TODO rename data['links'] to transfer_links
+    # TODO rename data['expires_at'] to expires_at
+    # TODO Use txid instead of intention_id
+    data&.fetch 'links', []
   end
 
   def blockchain_api

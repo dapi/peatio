@@ -6,6 +6,95 @@ class WalletService
     @adapter = Peatio::Wallet.registry[wallet.gateway.to_sym].new(wallet.settings.symbolize_keys)
   end
 
+  def create_deposit_intention!(member, currency, amount)
+    @adapter.configure(wallet:   @wallet.to_wallet_api_settings,
+                       currency: { id: currency.id })
+
+    intention = @adapter.create_deposit_intention!(account_id: member.id, amount: amount)
+    Deposit.create!(
+      type: Deposit.name,
+      member: member,
+      data: intention.slice(:links, :expires_at),
+      currency: currency,
+      amount: intention[:amount],
+      intention_id: intention[:id]
+    )
+  end
+
+  def support_deposits_polling?
+    @adapter.respond_to?(:poll_deposits) && @wallet.settings['allow_deposits_polling']
+  end
+
+  def support_withdraws_polling?
+    @adapter.respond_to?(:poll_withdraws) && @wallet.settings['allow_withdraws_polling']
+  end
+
+  def poll_withdraws!
+    @wallet.currencies.each do |currency|
+      @adapter.configure(wallet:   @wallet.to_wallet_api_settings,
+                         currency: { id: currency.id })
+
+      @adapter.poll_withdraws.each do |withdraw_info|
+        next unless withdraw_info.is_done
+        next if withdraw_info.withdraw_id.nil?
+        withdraw = Withdraw.find_by(id: withdraw_info.withdraw_id)
+        if withdraw.nil?
+          Rails.logger.warn("No such withdraw withdraw_info ##{withdraw_info.id} for #{currency.id} in wallet #{@wallet.name}")
+          next
+        end
+        if withdraw.amount!=withdraw_info.amount
+          Rails.logger.error("Withdraw and intention amounts are not equeal #{withdraw.amount}<>#{withdraw_info.amount} with withdraw_info ##{withdraw_info.id} for #{currency.id} in wallet #{@wallet.name}")
+          next
+        end
+        unless withdraw.confirming?
+          Rails.logger.warn("Withdraw #{withdraw.id} has wrong status (#{withdraw.aasm_state})")
+          next
+        end
+
+        Rails.logger.info("Withdraw #{withdraw.id} successed")
+        withdraw.success!
+      end
+    end
+  end
+
+  def poll_deposits!
+    @wallet.currencies.each do |currency|
+      @adapter.configure(wallet:   @wallet.to_wallet_api_settings,
+                         currency: { id: currency.id })
+
+      @adapter.poll_deposits.each do |intention|
+        deposit = Deposit.find_by(currency: currency, intention_id: intention[:id])
+        if deposit.present?
+          if deposit.amount==intention[:amount]
+            deposit.with_lock do
+              if deposit.submitted?
+                deposit.accept!
+
+                # Save beneficiary for future withdraws
+                if @wallet.settings['save_beneficiary']
+                  if intention[:address].present?
+                    Rails.logger.info("Save #{intention[:address]} as beneficiary for #{deposit.account.id}")
+                    deposit.account.member.beneficiaries
+                      .create_with(data: { address: intention[:address] }, state: :active)
+                      .find_or_create_by!(name: [@wallet.settings['beneficiary_prefix'], intention[:address]].compact.join(':'), currency: currency)
+                  else
+                    Rails.logger.warn("Deposit #{deposit.id} has no address to save to beneficiaries")
+                  end
+                end
+              else
+                Rails.logger.warn("Deposit #{deposit.id} has wrong status (#{deposit.aasm_state})") unless deposit.accepted?
+              end
+            end
+          else
+            Rails.logger.warn("Deposit and intention amounts are not equeal #{deposit.amount}<>#{intention[:amount]} with intention ##{intention[:id]} for #{currency.id} in wallet #{@wallet.name}")
+          end
+        else
+          Rails.logger.warn("No such deposit intention ##{intention[:id]} for #{currency.id} in wallet #{@wallet.name}")
+        end
+      end
+    end
+  end
+
   def create_address!(uid, pa_details)
     @adapter.configure(wallet:   @wallet.to_wallet_api_settings,
                        currency: @wallet.currencies.first.to_blockchain_api_settings)
@@ -18,9 +107,16 @@ class WalletService
     transaction = Peatio::Transaction.new(to_address: withdrawal.rid,
                                           amount:     withdrawal.amount,
                                           currency_id: withdrawal.currency_id,
-                                          options: { tid: withdrawal.tid })
+                                          options: { tid: withdrawal.tid, withdrawal_id: withdrawal.id })
+
     transaction = @adapter.create_transaction!(transaction)
-    save_transaction(transaction.as_json.merge(from_address: @wallet.address), withdrawal) if transaction.present?
+
+    withdrawal.with_lock do
+      save_transaction(transaction.as_json.merge(from_address: @wallet.address), withdrawal)
+      withdrawal.update metadata: withdrawal.metadata.merge( 'links' => transaction.options['links'] ) if transaction.options&.has_key? 'links'
+      withdrawal.success! if withdrawal.confirming? && transaction.status == 'succeed'
+    end if transaction.present?
+
     transaction
   end
 
