@@ -33,7 +33,11 @@ gem 'faraday_middleware', '~> 0.13.1'
 gem 'faye', '~> 1.4'
 gem 'eventmachine', '~> 1.2'
 gem 'em-synchrony', '~> 1.0'
-gem 'jwt', '~> 2.2.0'
+
+# We use 2.3.0.dev for bitzlato client
+# Fill free to update to rubygem version when it will be released
+gem 'jwt', github: 'jwt/ruby-jwt'
+
 gem 'email_validator', '~> 1.6.0'
 gem 'validate_url', '~> 1.0.4'
 gem 'god', '~> 0.13.7', require: false
@@ -71,6 +75,10 @@ group :development do
   gem 'annotate',   '~> 3.1.0'
   gem 'ruby-prof',  '~> 0.17.0', require: false
   gem 'listen',     '>= 3.0.5', '< 3.2'
+
+  gem 'rspec'
+  gem 'guard'
+  gem 'guard-rspec', github: 'caspark/guard-rspec' # Use from github to remove rspec < 4.0 dependencies
 end
 
 group :test do
@@ -90,3 +98,7 @@ Dir.glob File.expand_path('../Gemfile.plugin', __FILE__) do |file|
 end
 
 gem "pg", "~> 1.2"
+
+gem "http_accept_language", "~> 2.1"
+
+gem "semver2", "~> 3.4"
